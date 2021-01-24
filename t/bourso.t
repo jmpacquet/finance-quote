@@ -20,7 +20,7 @@ if ( not $ENV{ONLINE_TEST} ) {
 #    Name		What		Test Case
 #
 #    action	        Stock		1rPAF, MSFT, FF11-SOLB, 1rPSOLB, 1rPCNP
-#    obligation	        Bond		1rPFR0010371401
+#    obligation	        Bond		1rPFR0011510593
 #    opcvm	        Fund		MP-802941
 #    warrant	        Warrant		2rPDE000CX0QLH6
 #    indice	        Index		1rPCAC
@@ -32,7 +32,7 @@ my %valid    = ('MP-802941'       => {currency => 'EUR', days =>  32, name => 'C
                 'FF11-SOLB'       => {currency => 'EUR', days =>   7, name => 'SOLVAY'},                          # Stock, EUR, Euronext Bruxelles
                 '1rPCNP'          => {currency => 'EUR', days =>   7, name => 'CNP ASSURANCES'},                  # Stock, EUR, Euronext Paris
                 '2rPDE000CX0QLH6' => {currency => 'EUR', days =>   7, name => 'GOLD/CITI WT OPEN'},               # Warrant
-                '1rPFR0010371401' => {currency => '%'  , days => 100, name => 'FRENCH REPUBLIC 4% 25/10/38 EUR'}, # Bond, EUR, Euronext Paris,
+                '1rPFR0011510593' => {currency => '%'  , days => 100, name => 'CREDIT AGRICOLE 3.15% 19/07/23 EUR'}, # Bond, EUR, Euronext Paris,
                 '1rPCAC'          => {currency => 'Pts', days =>   7, name => 'CAC 40'},                          # Index, Pts, Paris,
                 '1rTBX4'          => {currency => 'EUR', days =>   7, name => 'LYXOR ETF BX4'},                   # Tracker, EUR
                 );
