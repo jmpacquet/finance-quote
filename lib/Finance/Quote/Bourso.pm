@@ -73,12 +73,13 @@ use strict;
 
 package Finance::Quote::Bourso;
 
-use vars qw( $Bourso_URL);
+use vars qw( $Bourso_URL );
 
-use LWP::UserAgent;
 use HTTP::Request::Common;
-use HTML::TokeParser;
+use HTML::TreeBuilder;
+use Encode qw(decode);
 use JSON qw( decode_json );
+use utf8;
 
 # VERSION
 
@@ -87,6 +88,7 @@ my $Bourso_URL = 'https://www.boursorama.com/cours/';
 sub methods {
     return ( bourso => \&bourso );
 }
+
 {
     my @labels =
       qw/name last date isodate high low currency method/;
@@ -105,169 +107,82 @@ sub bourso_to_number {
 sub bourso {
     my $quoter = shift;
     my @stocks = @_;
-    my ( %info, $reply, $url, $te, $ts, $row, $style );
     my $ua = $quoter->user_agent();
+    my %info;
 
-    $url = $Bourso_URL;
+    foreach my $stock (@stocks) {
+        eval {
+          my $query = $Bourso_URL . $stock;
+          my $reply = $ua->request(GET $query);
+          my $body  = decode('UTF-8', $reply->content);
+          my $root  = HTML::TreeBuilder->new_from_content($body);
 
-    foreach my $stocks (@stocks) {
-        my $queryUrl = $url . $stocks;
-        $reply = $ua->request( GET $queryUrl);
+          my $div   = $root->look_down(_tag => 'div',
+                                       class => qr/^c-faceplate/);
 
-        # print "URL=".$queryUrl."\n";
+          my $name  = $div->look_down(_tag => 'a', class => qr/^c-faceplate__company-link/)->as_text();
+          $name =~ s/^\s+|\s+$//g;
+          utf8::encode($name);
 
-        if ( $reply->is_success ) {
+          my $currency = $div->look_down(_tag => 'span', class => qr/^c-faceplate__price-currency/)->as_text();
+          $currency =~ s/^\s+|\s+$//g;
 
-            # print $reply->content;
-            $info{ $stocks, "success" } = 1;
+          my ($date, $last, $symbol, $low, $high, $close, $exchange, $volume, $net);
 
-            my $tp = HTML::TokeParser->new( \$reply->content );
+          if ($div->attr('data-ist-init')) {
+              my $json  = JSON::decode_json($div->attr('data-ist-init'));
+              $date     = $json->{'tradeDate'};
+              $last     = $json->{'last'};
+              $symbol   = $json->{'symbol'};
+              $low      = $json->{'low'};
+              $high     = $json->{'high'};
+              $close    = $json->{'previousClose'};
+              $exchange = $json->{'exchangeCode'};
+              $volume   = $json->{'totalVolume'};
+              $net      = $json->{'variation'};
+          }
+          else {
+              # date captures more than the date, but the regular expression below extracts just the date
+              $date    = $div->look_down(_tag => 'div', class => qr/^c-faceplate__real-time/)->as_text();
+              $last    = $div->look_down(_tag => 'span', class => qr/^c-instrument c-instrument--last/)->as_text();
+              $symbol  = $stock;
+          }
 
-            # search 'data-faceplate-symbol' division
-            my $div = $tp->get_tag('div');
-            my ( $tag, $attr, $attrseq, $rawtxt ) = @{$div};
-            while ( $div = $tp->get_tag('div') ) {
-                ( $tag, $attr, $attrseq, $rawtxt ) = @{$div};
+          $info{$stock, 'symbol'}   = $symbol;
+          $info{$stock, 'name'}     = $name;
+          $info{$stock, 'currency'} = $currency;
+          $info{$stock, 'last'}     = $last;
+          $info{$stock, 'high'}     = $high if $high;
+          $info{$stock, 'low'}      = $low if $low;
+          $info{$stock, 'close'}    = $close if $close;
+          $info{$stock, 'exchange'} = $exchange if $exchange;
+          $info{$stock, 'volume'}   = $volume if $volume;
+          $info{$stock, 'net'}      = $net if $net;
 
-                # print $tag."\t".$attr->{'data-ist'}."\n";
-                if ( $attr->{'data-faceplate-symbol'} ) { 
-                    if ( $stocks eq $attr->{'data-faceplate-symbol'} ) {
-                        last;
-		    }
-                }
-            }
-            unless ($div) {
-                $info{ $stocks, "success" }  = 0;
-                $info{ $stocks, "errormsg" } = "Stock name $stocks not found";
+          # 2020-07-17 17:03:45
+          $quoter->store_date(\%info, $symbol, {isodate => $1}) if $date =~ m|([0-9]{4}-[0-9]{2}-[0-9]{2})|;
 
-                # print "Stock name $stocks not found\n";
-                next;
-            }
+          # dd/mm/yyyy
+          $quoter->store_date(\%info, $symbol, {eurodate => $1}) if $date =~ m|([0-9]{2}/[0-9]{2}/[0-9]{4})|;
 
-            # set method
-            $info{ $stocks, "method" } = "bourso";
-
-            # retrieve SYMBOL
-            my $symbol = $attr->{'data-ist'};
-
-            # print $tag."\t".$attr->{'class'}."\n";
-            # print "symbol=".$symbol."\n";
-            if ($symbol) {
-                $info{ $stocks, "symbol" } = $symbol;
-
-                # print initial values
-                # print $tag."\t".$attr->{'data-ist-init'}."\n";
-                my $line = $attr->{'data-ist-init'};
-                $line =~ s/&quote\;/\"/g;
-                my $json_data = JSON::decode_json $line;
-                foreach my $key ( keys %$json_data ) {
-                    $info{ $stocks, $key } = $json_data->{$key};
-                    if ( $key eq 'tradeDate' ) {
-                        my $year  = substr( $json_data->{$key}, 0, 4 );
-                        my $month = substr( $json_data->{$key}, 5, 2 );
-                        my $day   = substr( $json_data->{$key}, 8, 2 );
-                        $info{ $stocks, 'date' } =
-                          $month . "/" . $day . "/" . $year;
-                        $info{ $stocks, 'isodate' } =
-                          $year . "-" . $month . "-" . $day;
-                    }
-                }
-
-                # retrieve NAME
-                my $a    = $tp->get_tag('a');
-                my $name = $tp->get_trimmed_text("/a");
-
-                # print $name."\n";
-                $info{ $stocks, "name" } = $name;
-
-                # retrieve CURRENCY (<span class="c-faceplate__price-currency">)
-                my $span;
-                while ( $span = $tp->get_tag('span') ) {
-                    my ( $tag, $attr, $attrseq, $rawtxt ) = @{$span};
-
-                    # print $tag."\t".$attr->{'class'}."\n";
-                    if ( $attr->{'class'} ) {
-                        if ( $attr->{'class'} eq 'c-faceplate__price-currency' ) {
-                            last;
-			}
-                    }
-                }
-                my $currency = $tp->get_trimmed_text("/span");
-
-                # print $currency."\n";
-                $info{ $stocks, "currency" } = $currency;
-
-            }
-            else {
-                # retrieve NAME & SYMBOL
-                my $a = $tp->get_tag('a');
-                ( $tag, $attr, $attrseq, $rawtxt ) = @{$a};
-                my $link = $attr->{'href'};
-
-                # print $link."\n";
-                my $premier = index( $link, 'cours/' );
-                my $dernier = 0;
-                if ($premier) {
-                    $premier += 6;
-                    $dernier = index( $link, '/', $premier );
-                }
-                if ($dernier) {
-                    $symbol = substr( $link, $premier, $dernier - $premier );
-
-                    # print $symbol."\n";
-                    $info{ $stocks, "symbol" } = $symbol;
-                }
-
-                my $name = $tp->get_trimmed_text("/a");
-
-                # print $name."\n";
-                $info{ $stocks, "name" } = $name;
-
-                my $span = $tp->get_tag('span');
-                ( $tag, $attr, $attrseq, $rawtxt ) = @{$span};
-                my $last = $tp->get_trimmed_text("/span");
-                $info{ $stocks, "last" } = $last;
-                $span = $tp->get_tag('span');
-                ( $tag, $attr, $attrseq, $rawtxt ) = @{$span};
-                my $currency = $tp->get_trimmed_text("/span");
-                $info{ $stocks, "currency" } = $currency;
-
-                while ( $div = $tp->get_tag('div') ) {
-                    my ( $tag, $attr, $attrseq, $rawtxt ) = @{$div};
-
-                    # print $tag."\t".$attr->{'class'}."\n";
-                    if ( $attr->{'class'} eq 'c-faceplate__real-time' ) {
-                        last;
-                    }
-                }
-                if ($div) {
-                    my $lastdate = $tp->get_trimmed_text("/div");
-                    my $year     = substr( $lastdate, -4, 4 );
-                    my $month    = substr( $lastdate, -7, 2 );
-                    my $day      = substr( $lastdate, -10, 2 );
-
-                    # print $month."/".$day."/".$year."\n";
-                    $info{ $stocks, "date" } =
-                      $month . "/" . $day . "/" . $year;
-                    $info{ $stocks, 'isodate' } =
-                      $year . "-" . $month . "-" . $day;
-                }
-            }
-
-        }
-        else {
-            $info{ $stocks, "success" }  = 0;
-            $info{ $stocks, "errormsg" } = "Error retrieving $stocks ";
+          $info{$stock, 'method' } = 'bourso'; 
+          $info{$stock, 'success'} = 1;
+        };
+        if ($@) {
+          $info{$stock, 'success'}  = 0;
+          $info{$stock, 'errormsg'} = 'Failed to retrieve quote';
         }
     }
+
     return wantarray() ? %info : \%info;
     return \%info;
 }
+
 1;
 
 =head1 NAME
 
-Finance::Quote::Bourso Obtain quotes from Boursorama.
+Finance::Quote::Bourso - Obtain quotes from Boursorama.
 
 =head1 SYNOPSIS
 
@@ -284,7 +199,7 @@ This module fetches information from the "Paris Stock Exchange",
 https://www.boursorama.com. All stocks are available.
 
 This module is loaded by default on a Finance::Quote object. It's
-also possible to load it explicity by placing "bourso" in the argument
+also possible to load it explicitly by placing "bourso" in the argument
 list to Finance::Quote->new().
 
 Information obtained by this module may be covered by www.boursorama.com
@@ -292,9 +207,9 @@ terms and conditions See https://www.boursorama.com/ for details.
 
 =head1 LABELS RETURNED
 
-The following labels may be returned by Finance::Quote::Bourso :
-name, last, date, p_change, open, high, low, close, nav,
-volume, currency, method, exchange, symbol.
+The following labels will be returned by Finance::Quote::Bourso : name, last,
+symbol, date, isodate, method, currency.  For some symbols, additional
+information is available: exchange, high, low, close, net, volume.
 
 =head1 SEE ALSO
 
